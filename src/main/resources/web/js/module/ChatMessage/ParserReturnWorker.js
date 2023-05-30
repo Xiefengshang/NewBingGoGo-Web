@@ -1,6 +1,7 @@
-import generateImages from "../aToos/generateImages.js";
-import nBGGFetch from "../aToos/nBGGFetch.js";
+import generateImages from "../generateImages.js";
+import nBGGFetch from "../nBGGFetch.js";
 import CookieID from "../CookieID.js";
+import RandomAddress from "../RandomAddress.js";
 
 /**
  * 解析消息的对象
@@ -39,6 +40,23 @@ export default class ParserReturnWorker {
 
             }
         });
+
+        //复制粘贴
+        chatDiv.addEventListener('click', async function(event) {
+            if (event.target.classList.contains("copy-bingcat")) {
+                let messageElement = event.target.parentElement.parentElement.getElementsByClassName('textBlock')[0];
+                await navigator.clipboard.writeText(messageElement.innerText);
+            }
+            if(event.target.classList.contains("copy-bingcat-markdown")){
+                let messageElement = event.target.parentElement.parentElement.getElementsByClassName('textBlock')[0];
+                await navigator.clipboard.writeText(messageElement.dataset.the_markdown_text);
+            }
+            if(event.target.classList.contains("code-copy")){
+                let messageElement = event.target.parentElement;
+                await navigator.clipboard.writeText(messageElement.innerText);
+            }
+        });
+
     }
     /**
      (id,元素的tag,父元素,创建时顺便添加的class:可以多个)
@@ -114,7 +132,7 @@ export default class ParserReturnWorker {
         }else {
             go.classList.remove('preview');
         }
-        let bobo = this.getByClass('bobo','div',go);
+        let bobo = this.getByClass('bobo','pre',go);
         bobo.innerText = message;
         bobo.classList.add('markdown-body');
         return id;
@@ -185,15 +203,20 @@ export default class ParserReturnWorker {
             }else if(result.value === 'CaptchaChallenge'){
                 this.addError(result.message);
                 if(window.location.protocol==="chrome-extension:"){
-                    this.addError('当前账号请求过多，需要通过机器人检查！需要科学上网！无法通过请等待24小时后再试。');
+                    this.addError('当前账号请求过多，需要通过机器人检查！无法通过请等待24小时后再试。');
+                    this.addError('正在尝试通过验证，需要科学上网环境。');
+                    this.addCAPTCHA();
+                    this.addError('若无法通过可尝试验证码验证');
                 }else {
                     this.addError(`当前账号请求过多，需要通过机器人检查！第${CookieID.cookieID}个账号`);
                 }
                 let rURL = new URL(window.location.href);
                 rURL.searchParams.set("cookieID",CookieID.cookieID);
+                rURL.searchParams.set("randomAddress",RandomAddress.randomAddress);
                 let p = new URLSearchParams();
                 p.append("cookieID",CookieID.cookieID);
                 p.append("redirect",rURL.href);
+                p.append("randomAddress",RandomAddress.randomAddress)
                 this.addError(`<p><a href="./ChatImgCAPTCHA.html?${p.toString()}">点击前往验证</a></p>`)
             }else{
                 this.addError(result.message);
@@ -206,9 +229,29 @@ export default class ParserReturnWorker {
         if (item.messages) {
             let nextFather = this.getByID(item.requestId, 'div', chatDiv, 'bing');
             this.porserMessages(item.messages, nextFather);
+            if (!nextFather.innerHTML) {
+                nextFather.remove();
+            }
         }
 
     }
+
+    /**
+     * 添加机器人检查验证
+     * */
+    addCAPTCHA() {
+        let div = this.getByID(new Date().getTime()+'CAPTCHA','div',this.chatDiv);
+
+        // let div = document.createElement('div');
+        // document.getElementById('chat').appendChild(div);
+
+        div.classList.add('CAPTCHAIframeDIV');
+        let iframe = document.createElement('iframe');
+        iframe.classList.add('CAPTCHAIframe');
+        iframe.src = 'https://www.bing.com/turing/captcha/challenge';
+        div.appendChild(iframe);
+    }
+
     /**
      * 解析arguments
      * 解析聊天消息，将消息添加到页面
@@ -232,7 +275,7 @@ export default class ParserReturnWorker {
             }
 
             //解析adaptiveCards 也就是聊天消息部分 下面类型的都是带有adaptiveCards的
-            if (!message.messageType && message.adaptiveCards) {//如果是正常的聊天
+            if (!message.messageType && message.adaptiveCards) {//如果是正常的聊天消息
                 let adaptiveCardsFatherDIV = this.getByID(message.messageId, 'div', father, 'adaptiveCardsFatherDIV');
                 this.porserAdaptiveCards(message.adaptiveCards, adaptiveCardsFatherDIV);
 
@@ -434,14 +477,14 @@ export default class ParserReturnWorker {
         throwOnError: false
     }
     /*
-    解析TextBlock body.type==TextBlock
+    解析TextBlock body.type==TextBlock，聊天正文内容
     */
     porserTextBlock(body, father) {
         if (!body.size) {
             let div = this.getByClass('textBlock', 'div', father, 'markdown-body');
 
             //如果新的内容长度小于旧的内容，则内容被撤回了。将就的内容冻结。并将新的内容输出。
-            if(div.the_markdown_text && div.the_markdown_text.length>body.text.length){
+            if(div.dataset.the_markdown_text && div.dataset.the_markdown_text.length>body.text.length){
                 div.classList.remove('textBlock');
                 div.classList.add('textBlockDeleted');
                 let endDiv = document.createElement('div');
@@ -453,9 +496,20 @@ export default class ParserReturnWorker {
                 div = newDiv;
             }
 
-            div.the_markdown_text = body.text;
-            div.innerHTML = marked.marked(this.completeCodeBlock(body.text));
-            renderMathInElement(div,this.renderMathInElementOptions);
+            div.dataset.the_markdown_text = body.text;
+            div.innerHTML = marked.marked(this.completeCodeBlock(body.text));//解析markdown
+            renderMathInElement(div,this.renderMathInElementOptions);//解析数学公式
+            for (let codeBox of div.getElementsByTagName('code')) {
+                hljs.highlightElement(codeBox);//代码高亮
+            }
+
+            for (let pre of div.getElementsByTagName('pre')){//添加复制按钮
+                //添加复制按钮
+                let div = document.createElement('div');
+                div.classList.add('code-copy');
+                pre.appendChild(div);
+            }
+
             let aaas = div.getElementsByTagName('a');
             //将超链接在新页面打开
             for(let i=0;i<aaas.length;i++){
@@ -472,7 +526,10 @@ export default class ParserReturnWorker {
 
 
             let nxdiv = this.getByClass('throttling', 'div', father);
-            nxdiv.innerHTML = `${this.throttling.numUserMessagesInConversation} / ${this.throttling.maxNumUserMessagesInConversation}`;
+            nxdiv.innerHTML = `
+<div class="copy-bingcat click">复制</div>
+<div class="copy-bingcat-markdown click">复制Markdowm</div>
+<div>${this.throttling.numUserMessagesInConversation} / ${this.throttling.maxNumUserMessagesInConversation}</div>`;
         } else if (body.size === 'small') {
             //原本bing官网的small并没有输出
         }
@@ -535,6 +592,10 @@ export default class ParserReturnWorker {
                 return;
             }
             if (json.type === 3) {
+                if(json.error){
+                    this.addError(json.error)
+                    this.addError("发生未知错误")
+                }
                 returnMessage.close();
             } else if (json.type === 1) {
                 this.porserArguments(json.arguments,returnMessage);
